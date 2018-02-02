@@ -1,0 +1,103 @@
+//This mono window LST algorithm is based on Wang et al. 2015
+//"An Improved Mono-Window Algorithm for Land Surface
+//Temperature Retrieval from Landsat 8 Thermal Infrared
+//Sensor Data" Remote Sens. 2015, 7, 4268-4289; doi:10.3390/rs70404268
+//Most of the variables have been named to match, as close as possible, those listed in Wang et al. 2015
+
+//For this example, LST is estimated from a Landsat 8 image taken on June 14th, 2014 over Tucson, AZ
+//Image captured at 17:57z, 10:57 am local
+//Near surface air temp: 95 deg F, 35 deg C, and 308.15 K
+//Humidity (H): 16%
+
+//I clip the emisivity and LST images to a study area in the hopes that it processed quicker
+//the 'table' variable above is an imported study area. In this example, Civano in Tucson, AZ
+
+//Center on the study area and zoom in close
+Map.centerObject(table, 14);
+
+//    Determination of Ground Emissivity (epsilon10)
+//My solution here is to pull in an ASTER emissivity image, but Wang et al. 2015 have other solutions.
+//I take the average of ASTER emis of band 13 & 14 to coincide with Landsat 8 Band 10 spectral range
+var aster_emis14 = ee.Image("NASA/ASTER_GED/AG100_003").select(4).divide(1000);
+var aster_emis13 = ee.Image("NASA/ASTER_GED/AG100_003").select(3).divide(1000);
+//Take the average, clip to the study area, and reproject to match the Landsat 8 image
+var epsilon10 = aster_emis13.add(aster_emis14).divide(2).clip(table).reproject({crs: 'EPSG:32612'});
+print('Emis - epsilon10', epsilon10);
+
+//Atmospheric Transmittance of Landsat 8 Band 10 (tau10)
+//The following variables were taken from Section 5 p. 4277-4278 (E,A), or found in weather data (H)
+var H = 16; //find humidity in weather data. I use weather underground historical
+var E = 37.25;
+var A = 1.15;
+var Rw0 = 0.6593; //for subtropical summer and winter
+var w0 = (H*E*A)/1000;
+//var w = w0/Rw0
+var w = 1.039; //computed this outside of GEE
+//print(w, "w");
+var tau10 = (0.9184 - (0.0725*w));
+
+//    Effective mean atmospheric temperature "Ta"
+//"Ta" requires calculation of "T0" first
+//"T0" is usually calculated using the methods listed on p. 10-11 of 
+//Wang et al. 2015 (Section 4)
+//Since our study area is small, I use the listed air temp from 
+//Weather Underground (www.wunderground.com) for the time of day the image
+//was captured
+//For Civano I used the summer temperature equation in table 3
+var T0 = 308.15;
+var Ta = 16.0110 + (0.9262*T0);
+
+//    Brightness temperature of the Landsat 8 Band 10
+//Clip to study area and multiply by scale factor (0.1)
+var T10 = ee.Image('LANDSAT/LC08/C01/T1_SR/LC08_036038_20140121').select(['B10']).clip(table).multiply(0.1);
+print ('T10 - Band 10 Brightness LST', T10);
+
+//C10 and D10 are internal parameters calculated as follows:
+var D10 = epsilon10.expression(
+  '(1-t10)*(1+(1-e10)*t10)', {
+    e10: epsilon10,
+    t10: tau10,
+  });
+var C10 = epsilon10.multiply(tau10);
+
+//a10 and b10 are constants used to approximate the derivative 
+//of the Planck radiance function; see Table 1 in Wang et al. 2015
+//I check the temperature min/max of band 10 (T10) for guidance on which row to use in Table 1
+var b10 = 0.4581;
+var a10 = -70.1775;
+
+//    Calculate the LST of Landsat 8 TIRS Band 10
+//the image.expression statement requires that each variable be identified in the curly brackets
+var Ts = T10.expression(
+  '(a10*(1 - C10 - D10) + T10*(b10*(1 - C10 - D10) + C10 + D10) - (D10 * Ta))/C10', {
+    a10: a10,
+    C10: C10,
+    D10: D10,
+    T10: T10,
+    b10: b10,
+    Ta: Ta,
+  });
+print('Ts', Ts);
+
+//Convert to degrees C
+var Ts_C = Ts.add(-273.15);
+
+//Visualize the final product
+Map.addLayer(Ts_C, imageVisParam3, 'Ts in deg C');
+
+//Show study area outline
+var empty = ee.Image().byte();
+var outline = empty.paint({
+  featureCollection: table,
+  color: 1,
+  width: 2
+});
+Map.addLayer(outline, {palette: '#000000'}, 'Study Area Bounds');
+
+//Export the image
+Export.image.toDrive({
+  image: Ts_C,
+  description: 'LSTCivano',
+  scale: 30,
+});
+
