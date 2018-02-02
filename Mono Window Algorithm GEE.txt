@@ -67,7 +67,7 @@ var b10 = 0.4581;
 var a10 = -70.1775;
 
 //    Calculate the LST of Landsat 8 TIRS Band 10
-//the image.expression statement requires that each variable be identified in the curly brackets
+//the image.expression statement requires that each variable be identified within the curly brackets
 var Ts = T10.expression(
   '(a10*(1 - C10 - D10) + T10*(b10*(1 - C10 - D10) + C10 + D10) - (D10 * Ta))/C10', {
     a10: a10,
